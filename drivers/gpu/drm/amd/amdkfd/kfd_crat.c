@@ -28,6 +28,7 @@
 #include "kfd_topology.h"
 #include "amdgpu.h"
 #include "amdgpu_amdkfd.h"
+#include "amdgpu_xgmi.h"
 
 /* GPU Processor ID base for dGPUs for which VCRAT needs to be created.
  * GPU processor ID are expressed with Bit[31]=1.
@@ -1434,7 +1435,8 @@ static int kfd_fill_gpu_cache_info_from_gfx_config(struct kfd_dev *kdev,
 		pcache_info[i].flags = (CRAT_CACHE_FLAGS_ENABLED |
 					CRAT_CACHE_FLAGS_DATA_CACHE |
 					CRAT_CACHE_FLAGS_SIMD_CACHE);
-		pcache_info[0].num_cu_shared = adev->gfx.config.gc_num_tcp_per_wpg / 2;
+		pcache_info[i].num_cu_shared = adev->gfx.config.gc_num_tcp_per_wpg / 2;
+		pcache_info[i].cache_line_size = adev->gfx.config.gc_tcp_cache_line_size;
 		i++;
 	}
 	/* Scalar L1 Instruction Cache per SQC */
@@ -1446,6 +1448,7 @@ static int kfd_fill_gpu_cache_info_from_gfx_config(struct kfd_dev *kdev,
 					CRAT_CACHE_FLAGS_INST_CACHE |
 					CRAT_CACHE_FLAGS_SIMD_CACHE);
 		pcache_info[i].num_cu_shared = adev->gfx.config.gc_num_sqc_per_wgp * 2;
+		pcache_info[i].cache_line_size = adev->gfx.config.gc_instruction_cache_line_size;
 		i++;
 	}
 	/* Scalar L1 Data Cache per SQC */
@@ -1456,6 +1459,7 @@ static int kfd_fill_gpu_cache_info_from_gfx_config(struct kfd_dev *kdev,
 					CRAT_CACHE_FLAGS_DATA_CACHE |
 					CRAT_CACHE_FLAGS_SIMD_CACHE);
 		pcache_info[i].num_cu_shared = adev->gfx.config.gc_num_sqc_per_wgp * 2;
+		pcache_info[i].cache_line_size = adev->gfx.config.gc_scalar_data_cache_line_size;
 		i++;
 	}
 	/* GL1 Data Cache per SA */
@@ -1468,6 +1472,7 @@ static int kfd_fill_gpu_cache_info_from_gfx_config(struct kfd_dev *kdev,
 					CRAT_CACHE_FLAGS_DATA_CACHE |
 					CRAT_CACHE_FLAGS_SIMD_CACHE);
 		pcache_info[i].num_cu_shared = adev->gfx.config.max_cu_per_sh;
+		pcache_info[i].cache_line_size = 0;
 		i++;
 	}
 	/* L2 Data Cache per GPU (Total Tex Cache) */
@@ -1478,6 +1483,7 @@ static int kfd_fill_gpu_cache_info_from_gfx_config(struct kfd_dev *kdev,
 					CRAT_CACHE_FLAGS_DATA_CACHE |
 					CRAT_CACHE_FLAGS_SIMD_CACHE);
 		pcache_info[i].num_cu_shared = adev->gfx.config.max_cu_per_sh;
+		pcache_info[i].cache_line_size = adev->gfx.config.gc_tcc_cache_line_size;
 		i++;
 	}
 	/* L3 Data Cache per GPU */
@@ -1488,6 +1494,7 @@ static int kfd_fill_gpu_cache_info_from_gfx_config(struct kfd_dev *kdev,
 					CRAT_CACHE_FLAGS_DATA_CACHE |
 					CRAT_CACHE_FLAGS_SIMD_CACHE);
 		pcache_info[i].num_cu_shared = adev->gfx.config.max_cu_per_sh;
+		pcache_info[i].cache_line_size = 0;
 		i++;
 	}
 	return i;
@@ -2322,6 +2329,8 @@ static int kfd_create_vcrat_image_gpu(void *pcrat_image,
 			if (!peer_dev->gpu)
 				continue;
 			if (peer_dev->gpu->kfd->hive_id != kdev->kfd->hive_id)
+				continue;
+			if (!amdgpu_xgmi_get_is_sharing_enabled(kdev->adev, peer_dev->gpu->adev))
 				continue;
 			sub_type_hdr = (typeof(sub_type_hdr))(
 				(char *)sub_type_hdr +

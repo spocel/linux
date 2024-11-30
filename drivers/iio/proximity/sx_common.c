@@ -268,7 +268,7 @@ EXPORT_SYMBOL_NS_GPL(sx_common_read_event_config, SEMTECH_PROX);
 int sx_common_write_event_config(struct iio_dev *indio_dev,
 				 const struct iio_chan_spec *chan,
 				 enum iio_event_type type,
-				 enum iio_event_direction dir, int state)
+				 enum iio_event_direction dir, bool state)
 {
 	struct sx_common_data *data = iio_priv(indio_dev);
 	unsigned int eventirq = SX_COMMON_FAR_IRQ | SX_COMMON_CLOSE_IRQ;
@@ -369,8 +369,7 @@ static irqreturn_t sx_common_trigger_handler(int irq, void *private)
 
 	mutex_lock(&data->mutex);
 
-	for_each_set_bit(bit, indio_dev->active_scan_mask,
-			 indio_dev->masklength) {
+	iio_for_each_active_channel(indio_dev, bit) {
 		ret = data->chip_info->ops.read_prox_data(data,
 						     &indio_dev->channels[bit],
 						     &val);
@@ -398,8 +397,7 @@ static int sx_common_buffer_preenable(struct iio_dev *indio_dev)
 	int bit, ret;
 
 	mutex_lock(&data->mutex);
-	for_each_set_bit(bit, indio_dev->active_scan_mask,
-			 indio_dev->masklength)
+	iio_for_each_active_channel(indio_dev, bit)
 		__set_bit(indio_dev->channels[bit].channel, &channels);
 
 	ret = sx_common_update_chan_en(data, channels, data->chan_event);
@@ -422,27 +420,6 @@ static const struct iio_buffer_setup_ops sx_common_buffer_setup_ops = {
 	.preenable = sx_common_buffer_preenable,
 	.postdisable = sx_common_buffer_postdisable,
 };
-
-void sx_common_get_raw_register_config(struct device *dev,
-				       struct sx_common_reg_default *reg_def)
-{
-#ifdef CONFIG_ACPI
-	struct acpi_device *adev = ACPI_COMPANION(dev);
-	u32 raw = 0, ret;
-	char prop[80];
-
-	if (!reg_def->property || !adev)
-		return;
-
-	snprintf(prop, ARRAY_SIZE(prop), "%s,reg_%s", acpi_device_hid(adev), reg_def->property);
-	ret = device_property_read_u32(dev, prop, &raw);
-	if (ret)
-		return;
-
-	reg_def->def = raw;
-#endif
-}
-EXPORT_SYMBOL_NS_GPL(sx_common_get_raw_register_config, SEMTECH_PROX);
 
 #define SX_COMMON_SOFT_RESET				0xde
 

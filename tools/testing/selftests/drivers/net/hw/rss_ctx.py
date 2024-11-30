@@ -3,10 +3,10 @@
 
 import datetime
 import random
-from lib.py import ksft_run, ksft_pr, ksft_exit, ksft_eq, ksft_ge, ksft_lt
+from lib.py import ksft_run, ksft_pr, ksft_exit, ksft_eq, ksft_ne, ksft_ge, ksft_lt
 from lib.py import NetDrvEpEnv
 from lib.py import EthtoolFamily, NetdevFamily
-from lib.py import KsftSkipEx
+from lib.py import KsftSkipEx, KsftFailEx
 from lib.py import rand_port
 from lib.py import ethtool, ip, defer, GenerateTraffic, CmdExitFailure
 
@@ -17,6 +17,15 @@ def _rss_key_str(key):
 
 def _rss_key_rand(length):
     return [random.randint(0, 255) for _ in range(length)]
+
+
+def _rss_key_check(cfg, data=None, context=0):
+    if data is None:
+        data = get_rss(cfg, context=context)
+    if 'rss-hash-key' not in data:
+        return
+    non_zero = [x for x in data['rss-hash-key'] if x != 0]
+    ksft_eq(bool(non_zero), True, comment=f"RSS key is all zero {data['rss-hash-key']}")
 
 
 def get_rss(cfg, context=0):
@@ -81,17 +90,18 @@ def _send_traffic_check(cfg, port, name, params):
     ksft_ge(directed, 20000, f"traffic on {name}: " + str(cnts))
     if params.get('noise'):
         ksft_lt(sum(cnts[i] for i in params['noise']), directed / 2,
-                "traffic on other queues:" + str(cnts))
+                f"traffic on other queues ({name})':" + str(cnts))
     if params.get('empty'):
         ksft_eq(sum(cnts[i] for i in params['empty']), 0,
-                "traffic on inactive queues: " + str(cnts))
+                f"traffic on inactive queues ({name}): " + str(cnts))
 
 
 def test_rss_key_indir(cfg):
     """Test basics like updating the main RSS key and indirection table."""
 
-    if len(_get_rx_cnts(cfg)) < 2:
-        KsftSkipEx("Device has only one queue (or doesn't support queue stats)")
+    qcnt = len(_get_rx_cnts(cfg))
+    if qcnt < 3:
+        KsftSkipEx("Device has fewer than 3 queues (or doesn't support queue stats)")
 
     data = get_rss(cfg)
     want_keys = ['rss-hash-key', 'rss-hash-function', 'rss-indirection-table']
@@ -101,6 +111,7 @@ def test_rss_key_indir(cfg):
         if not data[k]:
             raise KsftFailEx(f"ethtool results empty for '{k}': {data[k]}")
 
+    _rss_key_check(cfg, data=data)
     key_len = len(data['rss-hash-key'])
 
     # Set the key
@@ -110,9 +121,26 @@ def test_rss_key_indir(cfg):
     data = get_rss(cfg)
     ksft_eq(key, data['rss-hash-key'])
 
+    # Set the indirection table and the key together
+    key = _rss_key_rand(key_len)
+    ethtool(f"-X {cfg.ifname} equal 3 hkey " + _rss_key_str(key))
+    reset_indir = defer(ethtool, f"-X {cfg.ifname} default")
+
+    data = get_rss(cfg)
+    _rss_key_check(cfg, data=data)
+    ksft_eq(0, min(data['rss-indirection-table']))
+    ksft_eq(2, max(data['rss-indirection-table']))
+
+    # Reset indirection table and set the key
+    key = _rss_key_rand(key_len)
+    ethtool(f"-X {cfg.ifname} default hkey " + _rss_key_str(key))
+    data = get_rss(cfg)
+    _rss_key_check(cfg, data=data)
+    ksft_eq(0, min(data['rss-indirection-table']))
+    ksft_eq(qcnt - 1, max(data['rss-indirection-table']))
+
     # Set the indirection table
     ethtool(f"-X {cfg.ifname} equal 2")
-    reset_indir = defer(ethtool, f"-X {cfg.ifname} default")
     data = get_rss(cfg)
     ksft_eq(0, min(data['rss-indirection-table']))
     ksft_eq(1, max(data['rss-indirection-table']))
@@ -187,7 +215,7 @@ def test_rss_queue_reconfigure(cfg, main_ctx=True):
         defer(ethtool, f"-X {cfg.ifname} default")
     else:
         other_key = 'noise'
-        flow = f"flow-type tcp{cfg.addr_ipver} dst-port {port} context {ctx_id}"
+        flow = f"flow-type tcp{cfg.addr_ipver} dst-ip {cfg.addr} dst-port {port} context {ctx_id}"
         ntuple = ethtool_create(cfg, "-N", flow)
         defer(ethtool, f"-N {cfg.ifname} delete {ntuple}")
 
@@ -209,6 +237,32 @@ def test_rss_queue_reconfigure(cfg, main_ctx=True):
         pass
     else:
         raise Exception(f"Driver didn't prevent us from deactivating a used queue (context {ctx_id})")
+
+    if not main_ctx:
+        ethtool(f"-L {cfg.ifname} combined 4")
+        flow = f"flow-type tcp{cfg.addr_ipver} dst-ip {cfg.addr} dst-port {port} context {ctx_id} action 1"
+        try:
+            # this targets queue 4, which doesn't exist
+            ntuple2 = ethtool_create(cfg, "-N", flow)
+        except CmdExitFailure:
+            pass
+        else:
+            raise Exception(f"Driver didn't prevent us from targeting a nonexistent queue (context {ctx_id})")
+        # change the table to target queues 0 and 2
+        ethtool(f"-X {cfg.ifname} {ctx_ref} weight 1 0 1 0")
+        # ntuple rule therefore targets queues 1 and 3
+        ntuple2 = ethtool_create(cfg, "-N", flow)
+        # should replace existing filter
+        ksft_eq(ntuple, ntuple2)
+        _send_traffic_check(cfg, port, ctx_ref, { 'target': (1, 3),
+                                                  'noise' : (0, 2) })
+        # Setting queue count to 3 should fail, queue 3 is used
+        try:
+            ethtool(f"-L {cfg.ifname} combined 3")
+        except CmdExitFailure:
+            pass
+        else:
+            raise Exception(f"Driver didn't prevent us from deactivating a used queue (context {ctx_id})")
 
 
 def test_rss_resize(cfg):
@@ -274,6 +328,78 @@ def test_hitless_key_update(cfg):
     ksft_eq(carrier1 - carrier0, 0)
 
 
+def test_rss_context_dump(cfg):
+    """
+    Test dumping RSS contexts. This tests mostly exercises the kernel APIs.
+    """
+
+    # Get a random key of the right size
+    data = get_rss(cfg)
+    if 'rss-hash-key' in data:
+        key_data = _rss_key_rand(len(data['rss-hash-key']))
+        key = _rss_key_str(key_data)
+    else:
+        key_data = []
+        key = "ba:ad"
+
+    ids = []
+    try:
+        ids.append(ethtool_create(cfg, "-X", f"context new"))
+        defer(ethtool, f"-X {cfg.ifname} context {ids[-1]} delete")
+
+        ids.append(ethtool_create(cfg, "-X", f"context new weight 1 1"))
+        defer(ethtool, f"-X {cfg.ifname} context {ids[-1]} delete")
+
+        ids.append(ethtool_create(cfg, "-X", f"context new hkey {key}"))
+        defer(ethtool, f"-X {cfg.ifname} context {ids[-1]} delete")
+    except CmdExitFailure:
+        if not ids:
+            raise KsftSkipEx("Unable to add any contexts")
+        ksft_pr(f"Added only {len(ids)} out of 3 contexts")
+
+    expect_tuples = set([(cfg.ifname, -1)] + [(cfg.ifname, ctx_id) for ctx_id in ids])
+
+    # Dump all
+    ctxs = cfg.ethnl.rss_get({}, dump=True)
+    tuples = [(c['header']['dev-name'], c.get('context', -1)) for c in ctxs]
+    ksft_eq(len(tuples), len(set(tuples)), "duplicates in context dump")
+    ctx_tuples = set([ctx for ctx in tuples if ctx[0] == cfg.ifname])
+    ksft_eq(expect_tuples, ctx_tuples)
+
+    # Sanity-check the results
+    for data in ctxs:
+        ksft_ne(set(data['indir']), {0}, "indir table is all zero")
+        ksft_ne(set(data.get('hkey', [1])), {0}, "key is all zero")
+
+        # More specific checks
+        if len(ids) > 1 and data.get('context') == ids[1]:
+            ksft_eq(set(data['indir']), {0, 1},
+                    "ctx1 - indir table mismatch")
+        if len(ids) > 2 and data.get('context') == ids[2]:
+            ksft_eq(data['hkey'], bytes(key_data), "ctx2 - key mismatch")
+
+    # Ifindex filter
+    ctxs = cfg.ethnl.rss_get({'header': {'dev-name': cfg.ifname}}, dump=True)
+    tuples = [(c['header']['dev-name'], c.get('context', -1)) for c in ctxs]
+    ctx_tuples = set(tuples)
+    ksft_eq(len(tuples), len(ctx_tuples), "duplicates in context dump")
+    ksft_eq(expect_tuples, ctx_tuples)
+
+    # Skip ctx 0
+    expect_tuples.remove((cfg.ifname, -1))
+
+    ctxs = cfg.ethnl.rss_get({'start-context': 1}, dump=True)
+    tuples = [(c['header']['dev-name'], c.get('context', -1)) for c in ctxs]
+    ksft_eq(len(tuples), len(set(tuples)), "duplicates in context dump")
+    ctx_tuples = set([ctx for ctx in tuples if ctx[0] == cfg.ifname])
+    ksft_eq(expect_tuples, ctx_tuples)
+
+    # And finally both with ifindex and skip main
+    ctxs = cfg.ethnl.rss_get({'header': {'dev-name': cfg.ifname}, 'start-context': 1}, dump=True)
+    ctx_tuples = set([(c['header']['dev-name'], c.get('context', -1)) for c in ctxs])
+    ksft_eq(expect_tuples, ctx_tuples)
+
+
 def test_rss_context(cfg, ctx_cnt=1, create_with_cfg=None):
     """
     Test separating traffic into RSS contexts.
@@ -317,8 +443,11 @@ def test_rss_context(cfg, ctx_cnt=1, create_with_cfg=None):
             ctx_cnt = i
             break
 
+        _rss_key_check(cfg, context=ctx_id)
+
         if not create_with_cfg:
             ethtool(f"-X {cfg.ifname} context {ctx_id} {want_cfg}")
+            _rss_key_check(cfg, context=ctx_id)
 
         # Sanity check the context we just created
         data = get_rss(cfg, ctx_id)
@@ -326,7 +455,7 @@ def test_rss_context(cfg, ctx_cnt=1, create_with_cfg=None):
         ksft_eq(max(data['rss-indirection-table']), 2 + i * 2 + 1, "Unexpected context cfg: " + str(data))
 
         ports.append(rand_port())
-        flow = f"flow-type tcp{cfg.addr_ipver} dst-port {ports[i]} context {ctx_id}"
+        flow = f"flow-type tcp{cfg.addr_ipver} dst-ip {cfg.addr} dst-port {ports[i]} context {ctx_id}"
         ntuple = ethtool_create(cfg, "-N", flow)
         defer(ethtool, f"-N {cfg.ifname} delete {ntuple}")
 
@@ -413,7 +542,7 @@ def test_rss_context_out_of_order(cfg, ctx_cnt=4):
         ctx.append(defer(ethtool, f"-X {cfg.ifname} context {ctx_id} delete"))
 
         ports.append(rand_port())
-        flow = f"flow-type tcp{cfg.addr_ipver} dst-port {ports[i]} context {ctx_id}"
+        flow = f"flow-type tcp{cfg.addr_ipver} dst-ip {cfg.addr} dst-port {ports[i]} context {ctx_id}"
         ntuple_id = ethtool_create(cfg, "-N", flow)
         ntuple.append(defer(ethtool, f"-N {cfg.ifname} delete {ntuple_id}"))
 
@@ -466,7 +595,7 @@ def test_rss_context_overlap(cfg, other_ctx=0):
 
     port = rand_port()
     if other_ctx:
-        flow = f"flow-type tcp{cfg.addr_ipver} dst-port {port} context {other_ctx}"
+        flow = f"flow-type tcp{cfg.addr_ipver} dst-ip {cfg.addr} dst-port {port} context {other_ctx}"
         ntuple_id = ethtool_create(cfg, "-N", flow)
         ntuple = defer(ethtool, f"-N {cfg.ifname} delete {ntuple_id}")
 
@@ -484,7 +613,7 @@ def test_rss_context_overlap(cfg, other_ctx=0):
     # Now create a rule for context 1 and make sure traffic goes to a subset
     if other_ctx:
         ntuple.exec()
-    flow = f"flow-type tcp{cfg.addr_ipver} dst-port {port} context {ctx_id}"
+    flow = f"flow-type tcp{cfg.addr_ipver} dst-ip {cfg.addr} dst-port {port} context {ctx_id}"
     ntuple_id = ethtool_create(cfg, "-N", flow)
     defer(ethtool, f"-N {cfg.ifname} delete {ntuple_id}")
 
@@ -503,6 +632,72 @@ def test_rss_context_overlap2(cfg):
     test_rss_context_overlap(cfg, True)
 
 
+def test_delete_rss_context_busy(cfg):
+    """
+    Test that deletion returns -EBUSY when an rss context is being used
+    by an ntuple filter.
+    """
+
+    require_ntuple(cfg)
+
+    # create additional rss context
+    ctx_id = ethtool_create(cfg, "-X", "context new")
+    ctx_deleter = defer(ethtool, f"-X {cfg.ifname} context {ctx_id} delete")
+
+    # utilize context from ntuple filter
+    port = rand_port()
+    flow = f"flow-type tcp{cfg.addr_ipver} dst-ip {cfg.addr} dst-port {port} context {ctx_id}"
+    ntuple_id = ethtool_create(cfg, "-N", flow)
+    defer(ethtool, f"-N {cfg.ifname} delete {ntuple_id}")
+
+    # attempt to delete in-use context
+    try:
+        ctx_deleter.exec_only()
+        ctx_deleter.cancel()
+        raise KsftFailEx(f"deleted context {ctx_id} used by rule {ntuple_id}")
+    except CmdExitFailure:
+        pass
+
+
+def test_rss_ntuple_addition(cfg):
+    """
+    Test that the queue offset (ring_cookie) of an ntuple rule is added
+    to the queue number read from the indirection table.
+    """
+
+    require_ntuple(cfg)
+
+    queue_cnt = len(_get_rx_cnts(cfg))
+    if queue_cnt < 4:
+        try:
+            ksft_pr(f"Increasing queue count {queue_cnt} -> 4")
+            ethtool(f"-L {cfg.ifname} combined 4")
+            defer(ethtool, f"-L {cfg.ifname} combined {queue_cnt}")
+        except:
+            raise KsftSkipEx("Not enough queues for the test")
+
+    # Use queue 0 for normal traffic
+    ethtool(f"-X {cfg.ifname} equal 1")
+    defer(ethtool, f"-X {cfg.ifname} default")
+
+    # create additional rss context
+    ctx_id = ethtool_create(cfg, "-X", "context new equal 2")
+    defer(ethtool, f"-X {cfg.ifname} context {ctx_id} delete")
+
+    # utilize context from ntuple filter
+    port = rand_port()
+    flow = f"flow-type tcp{cfg.addr_ipver} dst-ip {cfg.addr} dst-port {port} context {ctx_id} action 2"
+    try:
+        ntuple_id = ethtool_create(cfg, "-N", flow)
+    except CmdExitFailure:
+        raise KsftSkipEx("Ntuple filter with RSS and nonzero action not supported")
+    defer(ethtool, f"-N {cfg.ifname} delete {ntuple_id}")
+
+    _send_traffic_check(cfg, port, f"context {ctx_id}", { 'target': (2, 3),
+                                                          'empty' : (1,),
+                                                          'noise' : (0,) })
+
+
 def main() -> None:
     with NetDrvEpEnv(__file__, nsim_test=False) as cfg:
         cfg.ethnl = EthtoolFamily()
@@ -511,9 +706,10 @@ def main() -> None:
         ksft_run([test_rss_key_indir, test_rss_queue_reconfigure,
                   test_rss_resize, test_hitless_key_update,
                   test_rss_context, test_rss_context4, test_rss_context32,
-                  test_rss_context_queue_reconfigure,
+                  test_rss_context_dump, test_rss_context_queue_reconfigure,
                   test_rss_context_overlap, test_rss_context_overlap2,
-                  test_rss_context_out_of_order, test_rss_context4_create_with_cfg],
+                  test_rss_context_out_of_order, test_rss_context4_create_with_cfg,
+                  test_delete_rss_context_busy, test_rss_ntuple_addition],
                  args=(cfg, ))
     ksft_exit()
 

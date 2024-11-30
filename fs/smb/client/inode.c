@@ -172,6 +172,8 @@ cifs_fattr_to_inode(struct inode *inode, struct cifs_fattr *fattr,
 		CIFS_I(inode)->time = 0; /* force reval */
 		return -ESTALE;
 	}
+	if (inode->i_state & I_NEW)
+		CIFS_I(inode)->netfs.zero_point = fattr->cf_eof;
 
 	cifs_revalidate_cache(inode, fattr);
 
@@ -527,6 +529,8 @@ cifs_sfu_type(struct cifs_fattr *fattr, const char *path,
 	struct cifs_fid fid;
 	struct cifs_open_parms oparms;
 	struct cifs_io_parms io_parms = {0};
+	char *symlink_buf_utf16;
+	unsigned int symlink_len_utf16;
 	char buf[24];
 	unsigned int bytes_read;
 	char *pbuf;
@@ -537,10 +541,11 @@ cifs_sfu_type(struct cifs_fattr *fattr, const char *path,
 	fattr->cf_mode &= ~S_IFMT;
 
 	if (fattr->cf_eof == 0) {
+		cifs_dbg(FYI, "Fifo\n");
 		fattr->cf_mode |= S_IFIFO;
 		fattr->cf_dtype = DT_FIFO;
 		return 0;
-	} else if (fattr->cf_eof < 8) {
+	} else if (fattr->cf_eof > 1 && fattr->cf_eof < 8) {
 		fattr->cf_mode |= S_IFREG;
 		fattr->cf_dtype = DT_REG;
 		return -EINVAL;	 /* EOPNOTSUPP? */
@@ -582,7 +587,7 @@ cifs_sfu_type(struct cifs_fattr *fattr, const char *path,
 	rc = tcon->ses->server->ops->sync_read(xid, &fid, &io_parms,
 					&bytes_read, &pbuf, &buf_type);
 	if ((rc == 0) && (bytes_read >= 8)) {
-		if (memcmp("IntxBLK", pbuf, 8) == 0) {
+		if (memcmp("IntxBLK\0", pbuf, 8) == 0) {
 			cifs_dbg(FYI, "Block device\n");
 			fattr->cf_mode |= S_IFBLK;
 			fattr->cf_dtype = DT_BLK;
@@ -593,8 +598,19 @@ cifs_sfu_type(struct cifs_fattr *fattr, const char *path,
 				mjr = le64_to_cpu(*(__le64 *)(pbuf+8));
 				mnr = le64_to_cpu(*(__le64 *)(pbuf+16));
 				fattr->cf_rdev = MKDEV(mjr, mnr);
+			} else if (bytes_read == 16) {
+				/*
+				 * Windows NFS server before Windows Server 2012
+				 * stores major and minor number in SFU-modified
+				 * style, just as 32-bit numbers. Recognize it.
+				 */
+				__u32 mjr; /* major */
+				__u32 mnr; /* minor */
+				mjr = le32_to_cpu(*(__le32 *)(pbuf+8));
+				mnr = le32_to_cpu(*(__le32 *)(pbuf+12));
+				fattr->cf_rdev = MKDEV(mjr, mnr);
 			}
-		} else if (memcmp("IntxCHR", pbuf, 8) == 0) {
+		} else if (memcmp("IntxCHR\0", pbuf, 8) == 0) {
 			cifs_dbg(FYI, "Char device\n");
 			fattr->cf_mode |= S_IFCHR;
 			fattr->cf_dtype = DT_CHR;
@@ -605,15 +621,59 @@ cifs_sfu_type(struct cifs_fattr *fattr, const char *path,
 				mjr = le64_to_cpu(*(__le64 *)(pbuf+8));
 				mnr = le64_to_cpu(*(__le64 *)(pbuf+16));
 				fattr->cf_rdev = MKDEV(mjr, mnr);
+			} else if (bytes_read == 16) {
+				/*
+				 * Windows NFS server before Windows Server 2012
+				 * stores major and minor number in SFU-modified
+				 * style, just as 32-bit numbers. Recognize it.
+				 */
+				__u32 mjr; /* major */
+				__u32 mnr; /* minor */
+				mjr = le32_to_cpu(*(__le32 *)(pbuf+8));
+				mnr = le32_to_cpu(*(__le32 *)(pbuf+12));
+				fattr->cf_rdev = MKDEV(mjr, mnr);
 			}
 		} else if (memcmp("LnxSOCK", pbuf, 8) == 0) {
 			cifs_dbg(FYI, "Socket\n");
 			fattr->cf_mode |= S_IFSOCK;
 			fattr->cf_dtype = DT_SOCK;
-		} else if (memcmp("IntxLNK", pbuf, 7) == 0) {
+		} else if (memcmp("IntxLNK\1", pbuf, 8) == 0) {
 			cifs_dbg(FYI, "Symlink\n");
 			fattr->cf_mode |= S_IFLNK;
 			fattr->cf_dtype = DT_LNK;
+			if ((fattr->cf_eof > 8) && (fattr->cf_eof % 2 == 0)) {
+				symlink_buf_utf16 = kmalloc(fattr->cf_eof-8 + 1, GFP_KERNEL);
+				if (symlink_buf_utf16) {
+					io_parms.offset = 8;
+					io_parms.length = fattr->cf_eof-8 + 1;
+					buf_type = CIFS_NO_BUFFER;
+					rc = tcon->ses->server->ops->sync_read(xid, &fid, &io_parms,
+									       &symlink_len_utf16,
+									       &symlink_buf_utf16,
+									       &buf_type);
+					/*
+					 * Check that read buffer has valid length and does not
+					 * contain UTF-16 null codepoint (via UniStrnlen() call)
+					 * because Linux cannot process symlink with null byte.
+					 */
+					if ((rc == 0) &&
+					    (symlink_len_utf16 > 0) &&
+					    (symlink_len_utf16 < fattr->cf_eof-8 + 1) &&
+					    (symlink_len_utf16 % 2 == 0) &&
+					    (UniStrnlen((wchar_t *)symlink_buf_utf16, symlink_len_utf16/2) == symlink_len_utf16/2)) {
+						fattr->cf_symlink_target =
+							cifs_strndup_from_utf16(symlink_buf_utf16,
+										symlink_len_utf16,
+										true,
+										cifs_sb->local_nls);
+						if (!fattr->cf_symlink_target)
+							rc = -ENOMEM;
+					}
+					kfree(symlink_buf_utf16);
+				} else {
+					rc = -ENOMEM;
+				}
+			}
 		} else if (memcmp("LnxFIFO", pbuf, 8) == 0) {
 			cifs_dbg(FYI, "FIFO\n");
 			fattr->cf_mode |= S_IFIFO;
@@ -623,6 +683,10 @@ cifs_sfu_type(struct cifs_fattr *fattr, const char *path,
 			fattr->cf_dtype = DT_REG;
 			rc = -EOPNOTSUPP;
 		}
+	} else if ((rc == 0) && (bytes_read == 1) && (pbuf[0] == '\0')) {
+		cifs_dbg(FYI, "Socket\n");
+		fattr->cf_mode |= S_IFSOCK;
+		fattr->cf_dtype = DT_SOCK;
 	} else {
 		fattr->cf_mode |= S_IFREG; /* then it is a file */
 		fattr->cf_dtype = DT_REG;
@@ -798,10 +862,6 @@ static void cifs_open_info_to_fattr(struct cifs_fattr *fattr,
 		fattr->cf_mode = S_IFREG | cifs_sb->ctx->file_mode;
 		fattr->cf_dtype = DT_REG;
 
-		/* clear write bits if ATTR_READONLY is set */
-		if (fattr->cf_cifsattrs & ATTR_READONLY)
-			fattr->cf_mode &= ~(S_IWUGO);
-
 		/*
 		 * Don't accept zero nlink from non-unix servers unless
 		 * delete is pending.  Instead mark it as unknown.
@@ -813,6 +873,10 @@ static void cifs_open_info_to_fattr(struct cifs_fattr *fattr,
 			fattr->cf_flags |= CIFS_FATTR_UNKNOWN_NLINK;
 		}
 	}
+
+	/* clear write bits if ATTR_READONLY is set */
+	if (fattr->cf_cifsattrs & ATTR_READONLY)
+		fattr->cf_mode &= ~(S_IWUGO);
 
 out_reparse:
 	if (S_ISLNK(fattr->cf_mode)) {
@@ -1042,12 +1106,25 @@ static int reparse_info_to_fattr(struct cifs_open_info_data *data,
 	}
 
 	rc = -EOPNOTSUPP;
-	switch ((data->reparse.tag = tag)) {
-	case 0: /* SMB1 symlink */
+	data->reparse.tag = tag;
+	if (!data->reparse.tag) {
 		if (server->ops->query_symlink) {
 			rc = server->ops->query_symlink(xid, tcon,
 							cifs_sb, full_path,
 							&data->symlink_target);
+		}
+		if (rc == -EOPNOTSUPP)
+			data->reparse.tag = IO_REPARSE_TAG_INTERNAL;
+	}
+
+	switch (data->reparse.tag) {
+	case 0: /* SMB1 symlink */
+		break;
+	case IO_REPARSE_TAG_INTERNAL:
+		rc = 0;
+		if (le32_to_cpu(data->fi.Attributes) & ATTR_DIRECTORY) {
+			cifs_create_junction_fattr(fattr, sb);
+			goto out;
 		}
 		break;
 	case IO_REPARSE_TAG_MOUNT_POINT:
@@ -1218,11 +1295,14 @@ handle_mnt_opt:
 				 __func__, rc);
 			goto out;
 		}
-	}
-
-	/* fill in remaining high mode bits e.g. SUID, VTX */
-	if (cifs_sb->mnt_cifs_flags & CIFS_MOUNT_UNX_EMUL)
+	} else if (cifs_sb->mnt_cifs_flags & CIFS_MOUNT_UNX_EMUL)
+		/* fill in remaining high mode bits e.g. SUID, VTX */
 		cifs_sfu_mode(fattr, full_path, cifs_sb, xid);
+	else if (!(tcon->posix_extensions))
+		/* clear write bits if ATTR_READONLY is set */
+		if (fattr->cf_cifsattrs & ATTR_READONLY)
+			fattr->cf_mode &= ~(S_IWUGO);
+
 
 	/* check for Minshall+French symlinks */
 	if (cifs_sb->mnt_cifs_flags & CIFS_MOUNT_MF_SYMLINKS) {
@@ -3004,6 +3084,7 @@ cifs_setattr_nounix(struct dentry *direntry, struct iattr *attrs)
 	int rc = -EACCES;
 	__u32 dosattr = 0;
 	__u64 mode = NO_CHANGE_64;
+	bool posix = cifs_sb_master_tcon(cifs_sb)->posix_extensions;
 
 	xid = get_xid();
 
@@ -3094,7 +3175,8 @@ cifs_setattr_nounix(struct dentry *direntry, struct iattr *attrs)
 		mode = attrs->ia_mode;
 		rc = 0;
 		if ((cifs_sb->mnt_cifs_flags & CIFS_MOUNT_CIFS_ACL) ||
-		    (cifs_sb->mnt_cifs_flags & CIFS_MOUNT_MODE_FROM_SID)) {
+		    (cifs_sb->mnt_cifs_flags & CIFS_MOUNT_MODE_FROM_SID) ||
+		    posix) {
 			rc = id_mode_to_cifs_acl(inode, full_path, &mode,
 						INVALID_UID, INVALID_GID);
 			if (rc) {

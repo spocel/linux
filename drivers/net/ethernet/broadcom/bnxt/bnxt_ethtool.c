@@ -705,112 +705,105 @@ skip_ring_stats:
 static void bnxt_get_strings(struct net_device *dev, u32 stringset, u8 *buf)
 {
 	struct bnxt *bp = netdev_priv(dev);
-	static const char * const *str;
 	u32 i, j, num_str;
+	const char *str;
 
 	switch (stringset) {
 	case ETH_SS_STATS:
 		for (i = 0; i < bp->cp_nr_rings; i++) {
-			if (is_rx_ring(bp, i)) {
-				num_str = NUM_RING_RX_HW_STATS;
-				for (j = 0; j < num_str; j++) {
-					sprintf(buf, "[%d]: %s", i,
-						bnxt_ring_rx_stats_str[j]);
-					buf += ETH_GSTRING_LEN;
+			if (is_rx_ring(bp, i))
+				for (j = 0; j < NUM_RING_RX_HW_STATS; j++) {
+					str = bnxt_ring_rx_stats_str[j];
+					ethtool_sprintf(&buf, "[%d]: %s", i,
+							str);
 				}
-			}
-			if (is_tx_ring(bp, i)) {
-				num_str = NUM_RING_TX_HW_STATS;
-				for (j = 0; j < num_str; j++) {
-					sprintf(buf, "[%d]: %s", i,
-						bnxt_ring_tx_stats_str[j]);
-					buf += ETH_GSTRING_LEN;
+			if (is_tx_ring(bp, i))
+				for (j = 0; j < NUM_RING_TX_HW_STATS; j++) {
+					str = bnxt_ring_tx_stats_str[j];
+					ethtool_sprintf(&buf, "[%d]: %s", i,
+							str);
 				}
-			}
 			num_str = bnxt_get_num_tpa_ring_stats(bp);
 			if (!num_str || !is_rx_ring(bp, i))
 				goto skip_tpa_stats;
 
 			if (bp->max_tpa_v2)
-				str = bnxt_ring_tpa2_stats_str;
-			else
-				str = bnxt_ring_tpa_stats_str;
-
-			for (j = 0; j < num_str; j++) {
-				sprintf(buf, "[%d]: %s", i, str[j]);
-				buf += ETH_GSTRING_LEN;
-			}
-skip_tpa_stats:
-			if (is_rx_ring(bp, i)) {
-				num_str = NUM_RING_RX_SW_STATS;
 				for (j = 0; j < num_str; j++) {
-					sprintf(buf, "[%d]: %s", i,
-						bnxt_rx_sw_stats_str[j]);
-					buf += ETH_GSTRING_LEN;
+					str = bnxt_ring_tpa2_stats_str[j];
+					ethtool_sprintf(&buf, "[%d]: %s", i,
+							str);
 				}
-			}
-			num_str = NUM_RING_CMN_SW_STATS;
-			for (j = 0; j < num_str; j++) {
-				sprintf(buf, "[%d]: %s", i,
-					bnxt_cmn_sw_stats_str[j]);
-				buf += ETH_GSTRING_LEN;
+			else
+				for (j = 0; j < num_str; j++) {
+					str = bnxt_ring_tpa_stats_str[j];
+					ethtool_sprintf(&buf, "[%d]: %s", i,
+							str);
+				}
+skip_tpa_stats:
+			if (is_rx_ring(bp, i))
+				for (j = 0; j < NUM_RING_RX_SW_STATS; j++) {
+					str = bnxt_rx_sw_stats_str[j];
+					ethtool_sprintf(&buf, "[%d]: %s", i,
+							str);
+				}
+			for (j = 0; j < NUM_RING_CMN_SW_STATS; j++) {
+				str = bnxt_cmn_sw_stats_str[j];
+				ethtool_sprintf(&buf, "[%d]: %s", i, str);
 			}
 		}
-		for (i = 0; i < BNXT_NUM_RING_ERR_STATS; i++) {
-			strscpy(buf, bnxt_ring_err_stats_arr[i], ETH_GSTRING_LEN);
-			buf += ETH_GSTRING_LEN;
-		}
+		for (i = 0; i < BNXT_NUM_RING_ERR_STATS; i++)
+			ethtool_puts(&buf, bnxt_ring_err_stats_arr[i]);
 
-		if (bp->flags & BNXT_FLAG_PORT_STATS) {
+		if (bp->flags & BNXT_FLAG_PORT_STATS)
 			for (i = 0; i < BNXT_NUM_PORT_STATS; i++) {
-				strcpy(buf, bnxt_port_stats_arr[i].string);
-				buf += ETH_GSTRING_LEN;
+				str = bnxt_port_stats_arr[i].string;
+				ethtool_puts(&buf, str);
 			}
-		}
+
 		if (bp->flags & BNXT_FLAG_PORT_STATS_EXT) {
 			u32 len;
 
 			len = min_t(u32, bp->fw_rx_stats_ext_size,
 				    ARRAY_SIZE(bnxt_port_stats_ext_arr));
 			for (i = 0; i < len; i++) {
-				strcpy(buf, bnxt_port_stats_ext_arr[i].string);
-				buf += ETH_GSTRING_LEN;
+				str = bnxt_port_stats_ext_arr[i].string;
+				ethtool_puts(&buf, str);
 			}
+
 			len = min_t(u32, bp->fw_tx_stats_ext_size,
 				    ARRAY_SIZE(bnxt_tx_port_stats_ext_arr));
 			for (i = 0; i < len; i++) {
-				strcpy(buf,
-				       bnxt_tx_port_stats_ext_arr[i].string);
-				buf += ETH_GSTRING_LEN;
+				str = bnxt_tx_port_stats_ext_arr[i].string;
+				ethtool_puts(&buf, str);
 			}
+
 			if (bp->pri2cos_valid) {
 				for (i = 0; i < 8; i++) {
-					strcpy(buf,
-					       bnxt_rx_bytes_pri_arr[i].string);
-					buf += ETH_GSTRING_LEN;
+					str = bnxt_rx_bytes_pri_arr[i].string;
+					ethtool_puts(&buf, str);
 				}
+
 				for (i = 0; i < 8; i++) {
-					strcpy(buf,
-					       bnxt_rx_pkts_pri_arr[i].string);
-					buf += ETH_GSTRING_LEN;
+					str = bnxt_rx_pkts_pri_arr[i].string;
+					ethtool_puts(&buf, str);
 				}
+
 				for (i = 0; i < 8; i++) {
-					strcpy(buf,
-					       bnxt_tx_bytes_pri_arr[i].string);
-					buf += ETH_GSTRING_LEN;
+					str = bnxt_tx_bytes_pri_arr[i].string;
+					ethtool_puts(&buf, str);
 				}
+
 				for (i = 0; i < 8; i++) {
-					strcpy(buf,
-					       bnxt_tx_pkts_pri_arr[i].string);
-					buf += ETH_GSTRING_LEN;
+					str = bnxt_tx_pkts_pri_arr[i].string;
+					ethtool_puts(&buf, str);
 				}
 			}
 		}
 		break;
 	case ETH_SS_TEST:
 		if (bp->num_tests)
-			memcpy(buf, bp->test_info->string,
-			       bp->num_tests * ETH_GSTRING_LEN);
+			for (i = 0; i < bp->num_tests; i++)
+				ethtool_puts(&buf, bp->test_info->string[i]);
 		break;
 	default:
 		netdev_err(bp->dev, "bnxt_get_strings invalid request %x\n",
@@ -955,11 +948,6 @@ static int bnxt_set_channels(struct net_device *dev,
 		}
 		tx_xdp = req_rx_rings;
 	}
-	rc = bnxt_check_rings(bp, req_tx_rings, req_rx_rings, sh, tcs, tx_xdp);
-	if (rc) {
-		netdev_warn(dev, "Unable to allocate the requested rings\n");
-		return rc;
-	}
 
 	if (bnxt_get_nr_rss_ctxs(bp, req_rx_rings) !=
 	    bnxt_get_nr_rss_ctxs(bp, bp->rx_nr_rings) &&
@@ -968,9 +956,12 @@ static int bnxt_set_channels(struct net_device *dev,
 		return -EINVAL;
 	}
 
-	bnxt_clear_usr_fltrs(bp, true);
-	if (BNXT_SUPPORTS_MULTI_RSS_CTX(bp))
-		bnxt_clear_rss_ctxs(bp);
+	rc = bnxt_check_rings(bp, req_tx_rings, req_rx_rings, sh, tcs, tx_xdp);
+	if (rc) {
+		netdev_warn(dev, "Unable to allocate the requested rings\n");
+		return rc;
+	}
+
 	if (netif_running(dev)) {
 		if (BNXT_PF(bp)) {
 			/* TODO CHIMP_FW: Send message to all VF's
@@ -1133,14 +1124,15 @@ static int bnxt_grxclsrule(struct bnxt *bp, struct ethtool_rxnfc *cmd)
 	fkeys = &fltr->fkeys;
 	fmasks = &fltr->fmasks;
 	if (fkeys->basic.n_proto == htons(ETH_P_IP)) {
-		if (fkeys->basic.ip_proto == IPPROTO_ICMP ||
-		    fkeys->basic.ip_proto == IPPROTO_RAW) {
+		if (fkeys->basic.ip_proto == BNXT_IP_PROTO_WILDCARD) {
 			fs->flow_type = IP_USER_FLOW;
 			fs->h_u.usr_ip4_spec.ip_ver = ETH_RX_NFC_IP4;
-			if (fkeys->basic.ip_proto == IPPROTO_ICMP)
-				fs->h_u.usr_ip4_spec.proto = IPPROTO_ICMP;
-			else
-				fs->h_u.usr_ip4_spec.proto = IPPROTO_RAW;
+			fs->h_u.usr_ip4_spec.proto = BNXT_IP_PROTO_WILDCARD;
+			fs->m_u.usr_ip4_spec.proto = 0;
+		} else if (fkeys->basic.ip_proto == IPPROTO_ICMP) {
+			fs->flow_type = IP_USER_FLOW;
+			fs->h_u.usr_ip4_spec.ip_ver = ETH_RX_NFC_IP4;
+			fs->h_u.usr_ip4_spec.proto = IPPROTO_ICMP;
 			fs->m_u.usr_ip4_spec.proto = BNXT_IP_PROTO_FULL_MASK;
 		} else if (fkeys->basic.ip_proto == IPPROTO_TCP) {
 			fs->flow_type = TCP_V4_FLOW;
@@ -1162,13 +1154,13 @@ static int bnxt_grxclsrule(struct bnxt *bp, struct ethtool_rxnfc *cmd)
 			fs->m_u.tcp_ip4_spec.pdst = fmasks->ports.dst;
 		}
 	} else {
-		if (fkeys->basic.ip_proto == IPPROTO_ICMPV6 ||
-		    fkeys->basic.ip_proto == IPPROTO_RAW) {
+		if (fkeys->basic.ip_proto == BNXT_IP_PROTO_WILDCARD) {
 			fs->flow_type = IPV6_USER_FLOW;
-			if (fkeys->basic.ip_proto == IPPROTO_ICMPV6)
-				fs->h_u.usr_ip6_spec.l4_proto = IPPROTO_ICMPV6;
-			else
-				fs->h_u.usr_ip6_spec.l4_proto = IPPROTO_RAW;
+			fs->h_u.usr_ip6_spec.l4_proto = BNXT_IP_PROTO_WILDCARD;
+			fs->m_u.usr_ip6_spec.l4_proto = 0;
+		} else if (fkeys->basic.ip_proto == IPPROTO_ICMPV6) {
+			fs->flow_type = IPV6_USER_FLOW;
+			fs->h_u.usr_ip6_spec.l4_proto = IPPROTO_ICMPV6;
 			fs->m_u.usr_ip6_spec.l4_proto = BNXT_IP_PROTO_FULL_MASK;
 		} else if (fkeys->basic.ip_proto == IPPROTO_TCP) {
 			fs->flow_type = TCP_V6_FLOW;
@@ -1291,10 +1283,12 @@ static int bnxt_add_l2_cls_rule(struct bnxt *bp,
 static bool bnxt_verify_ntuple_ip4_flow(struct ethtool_usrip4_spec *ip_spec,
 					struct ethtool_usrip4_spec *ip_mask)
 {
+	u8 mproto = ip_mask->proto;
+	u8 sproto = ip_spec->proto;
+
 	if (ip_mask->l4_4_bytes || ip_mask->tos ||
 	    ip_spec->ip_ver != ETH_RX_NFC_IP4 ||
-	    ip_mask->proto != BNXT_IP_PROTO_FULL_MASK ||
-	    (ip_spec->proto != IPPROTO_RAW && ip_spec->proto != IPPROTO_ICMP))
+	    (mproto && (mproto != BNXT_IP_PROTO_FULL_MASK || sproto != IPPROTO_ICMP)))
 		return false;
 	return true;
 }
@@ -1302,10 +1296,11 @@ static bool bnxt_verify_ntuple_ip4_flow(struct ethtool_usrip4_spec *ip_spec,
 static bool bnxt_verify_ntuple_ip6_flow(struct ethtool_usrip6_spec *ip_spec,
 					struct ethtool_usrip6_spec *ip_mask)
 {
+	u8 mproto = ip_mask->l4_proto;
+	u8 sproto = ip_spec->l4_proto;
+
 	if (ip_mask->l4_4_bytes || ip_mask->tclass ||
-	    ip_mask->l4_proto != BNXT_IP_PROTO_FULL_MASK ||
-	    (ip_spec->l4_proto != IPPROTO_RAW &&
-	     ip_spec->l4_proto != IPPROTO_ICMPV6))
+	    (mproto && (mproto != BNXT_IP_PROTO_FULL_MASK || sproto != IPPROTO_ICMPV6)))
 		return false;
 	return true;
 }
@@ -1359,7 +1354,8 @@ static int bnxt_add_ntuple_cls_rule(struct bnxt *bp,
 		struct ethtool_usrip4_spec *ip_spec = &fs->h_u.usr_ip4_spec;
 		struct ethtool_usrip4_spec *ip_mask = &fs->m_u.usr_ip4_spec;
 
-		fkeys->basic.ip_proto = ip_spec->proto;
+		fkeys->basic.ip_proto = ip_mask->proto ? ip_spec->proto
+						       : BNXT_IP_PROTO_WILDCARD;
 		fkeys->basic.n_proto = htons(ETH_P_IP);
 		fkeys->addrs.v4addrs.src = ip_spec->ip4src;
 		fmasks->addrs.v4addrs.src = ip_mask->ip4src;
@@ -1390,7 +1386,8 @@ static int bnxt_add_ntuple_cls_rule(struct bnxt *bp,
 		struct ethtool_usrip6_spec *ip_spec = &fs->h_u.usr_ip6_spec;
 		struct ethtool_usrip6_spec *ip_mask = &fs->m_u.usr_ip6_spec;
 
-		fkeys->basic.ip_proto = ip_spec->l4_proto;
+		fkeys->basic.ip_proto = ip_mask->l4_proto ? ip_spec->l4_proto
+							  : BNXT_IP_PROTO_WILDCARD;
 		fkeys->basic.n_proto = htons(ETH_P_IPV6);
 		fkeys->addrs.v6addrs.src = *(struct in6_addr *)&ip_spec->ip6src;
 		fmasks->addrs.v6addrs.src = *(struct in6_addr *)&ip_mask->ip6src;
@@ -1863,8 +1860,14 @@ static void bnxt_modify_rss(struct bnxt *bp, struct ethtool_rxfh_context *ctx,
 }
 
 static int bnxt_rxfh_context_check(struct bnxt *bp,
+				   const struct ethtool_rxfh_param *rxfh,
 				   struct netlink_ext_ack *extack)
 {
+	if (rxfh->hfunc && rxfh->hfunc != ETH_RSS_HASH_TOP) {
+		NL_SET_ERR_MSG_MOD(extack, "RSS hash function not supported");
+		return -EOPNOTSUPP;
+	}
+
 	if (!BNXT_SUPPORTS_MULTI_RSS_CTX(bp)) {
 		NL_SET_ERR_MSG_MOD(extack, "RSS contexts not supported");
 		return -EOPNOTSUPP;
@@ -1888,7 +1891,7 @@ static int bnxt_create_rxfh_context(struct net_device *dev,
 	struct bnxt_vnic_info *vnic;
 	int rc;
 
-	rc = bnxt_rxfh_context_check(bp, extack);
+	rc = bnxt_rxfh_context_check(bp, rxfh, extack);
 	if (rc)
 		return rc;
 
@@ -1915,8 +1918,12 @@ static int bnxt_create_rxfh_context(struct net_device *dev,
 	if (rc)
 		goto out;
 
+	/* Populate defaults in the context */
 	bnxt_set_dflt_rss_indir_tbl(bp, ctx);
+	ctx->hfunc = ETH_RSS_HASH_TOP;
 	memcpy(vnic->rss_hash_key, bp->rss_hash_key, HW_HASH_KEY_SIZE);
+	memcpy(ethtool_rxfh_context_key(ctx),
+	       bp->rss_hash_key, HW_HASH_KEY_SIZE);
 
 	rc = bnxt_hwrm_vnic_alloc(bp, vnic, 0, bp->rx_nr_rings);
 	if (rc) {
@@ -1953,7 +1960,7 @@ static int bnxt_modify_rxfh_context(struct net_device *dev,
 	struct bnxt_rss_ctx *rss_ctx;
 	int rc;
 
-	rc = bnxt_rxfh_context_check(bp, extack);
+	rc = bnxt_rxfh_context_check(bp, rxfh, extack);
 	if (rc)
 		return rc;
 
@@ -1990,7 +1997,6 @@ static int bnxt_set_rxfh(struct net_device *dev,
 
 	bnxt_modify_rss(bp, NULL, NULL, rxfh);
 
-	bnxt_clear_usr_fltrs(bp, false);
 	if (netif_running(bp->dev)) {
 		bnxt_close_nic(bp, false, false);
 		rc = bnxt_open_nic(bp, false, false);
@@ -2831,11 +2837,16 @@ static int bnxt_get_link_ksettings(struct net_device *dev,
 	}
 
 	base->port = PORT_NONE;
-	if (link_info->media_type == PORT_PHY_QCFG_RESP_MEDIA_TYPE_TP) {
+	if (media == BNXT_MEDIA_TP) {
 		base->port = PORT_TP;
 		linkmode_set_bit(ETHTOOL_LINK_MODE_TP_BIT,
 				 lk_ksettings->link_modes.supported);
 		linkmode_set_bit(ETHTOOL_LINK_MODE_TP_BIT,
+				 lk_ksettings->link_modes.advertising);
+	} else if (media == BNXT_MEDIA_KR) {
+		linkmode_set_bit(ETHTOOL_LINK_MODE_Backplane_BIT,
+				 lk_ksettings->link_modes.supported);
+		linkmode_set_bit(ETHTOOL_LINK_MODE_Backplane_BIT,
 				 lk_ksettings->link_modes.advertising);
 	} else {
 		linkmode_set_bit(ETHTOOL_LINK_MODE_FIBRE_BIT,
@@ -2843,7 +2854,7 @@ static int bnxt_get_link_ksettings(struct net_device *dev,
 		linkmode_set_bit(ETHTOOL_LINK_MODE_FIBRE_BIT,
 				 lk_ksettings->link_modes.advertising);
 
-		if (link_info->media_type == PORT_PHY_QCFG_RESP_MEDIA_TYPE_DAC)
+		if (media == BNXT_MEDIA_CR)
 			base->port = PORT_DA;
 		else
 			base->port = PORT_FIBRE;
@@ -4151,7 +4162,7 @@ static void bnxt_get_pkgver(struct net_device *dev)
 
 	if (!bnxt_get_pkginfo(dev, buf, sizeof(buf))) {
 		len = strlen(bp->fw_ver_str);
-		snprintf(bp->fw_ver_str + len, FW_VER_STR_LEN - len - 1,
+		snprintf(bp->fw_ver_str + len, FW_VER_STR_LEN - len,
 			 "/pkg %s", buf);
 	}
 }
@@ -4978,14 +4989,21 @@ static int bnxt_set_dump(struct net_device *dev, struct ethtool_dump *dump)
 {
 	struct bnxt *bp = netdev_priv(dev);
 
-	if (dump->flag > BNXT_DUMP_CRASH) {
-		netdev_info(dev, "Supports only Live(0) and Crash(1) dumps.\n");
+	if (dump->flag > BNXT_DUMP_DRIVER) {
+		netdev_info(dev, "Supports only Live(0), Crash(1), Driver(2) dumps.\n");
 		return -EINVAL;
 	}
 
-	if (!IS_ENABLED(CONFIG_TEE_BNXT_FW) && dump->flag == BNXT_DUMP_CRASH) {
-		netdev_info(dev, "Cannot collect crash dump as TEE_BNXT_FW config option is not enabled.\n");
-		return -EOPNOTSUPP;
+	if (dump->flag == BNXT_DUMP_CRASH) {
+		if (bp->fw_dbg_cap & DBG_QCAPS_RESP_FLAGS_CRASHDUMP_SOC_DDR &&
+		    (!IS_ENABLED(CONFIG_TEE_BNXT_FW))) {
+			netdev_info(dev,
+				    "Cannot collect crash dump as TEE_BNXT_FW config option is not enabled.\n");
+			return -EOPNOTSUPP;
+		} else if (!(bp->fw_dbg_cap & DBG_QCAPS_RESP_FLAGS_CRASHDUMP_HOST_DDR)) {
+			netdev_info(dev, "Crash dump collection from host memory is not supported on this interface.\n");
+			return -EOPNOTSUPP;
+		}
 	}
 
 	bp->dump_flag = dump->flag;
@@ -5030,11 +5048,8 @@ static int bnxt_get_ts_info(struct net_device *dev,
 	struct bnxt_ptp_cfg *ptp;
 
 	ptp = bp->ptp_cfg;
-	info->so_timestamping = SOF_TIMESTAMPING_TX_SOFTWARE |
-				SOF_TIMESTAMPING_RX_SOFTWARE |
-				SOF_TIMESTAMPING_SOFTWARE;
+	info->so_timestamping = SOF_TIMESTAMPING_TX_SOFTWARE;
 
-	info->phc_index = -1;
 	if (!ptp)
 		return 0;
 
@@ -5279,8 +5294,8 @@ void bnxt_ethtool_free(struct bnxt *bp)
 
 const struct ethtool_ops bnxt_ethtool_ops = {
 	.cap_link_lanes_supported	= 1,
-	.cap_rss_ctx_supported		= 1,
-	.rxfh_max_context_id		= BNXT_MAX_ETH_RSS_CTX,
+	.rxfh_per_ctx_key		= 1,
+	.rxfh_max_num_contexts		= BNXT_MAX_ETH_RSS_CTX + 1,
 	.rxfh_indir_space		= BNXT_MAX_RSS_TABLE_ENTRIES_P5,
 	.rxfh_priv_size			= sizeof(struct bnxt_rss_ctx),
 	.supported_coalesce_params = ETHTOOL_COALESCE_USECS |

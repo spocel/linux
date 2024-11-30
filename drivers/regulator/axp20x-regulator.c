@@ -143,6 +143,7 @@
 #define AXP717_DCDC3_NUM_VOLTAGES	103
 #define AXP717_DCDC_V_OUT_MASK		GENMASK(6, 0)
 #define AXP717_LDO_V_OUT_MASK		GENMASK(4, 0)
+#define AXP717_BOOST_V_OUT_MASK		GENMASK(7, 4)
 
 #define AXP803_PWR_OUT_DCDC1_MASK	BIT_MASK(0)
 #define AXP803_PWR_OUT_DCDC2_MASK	BIT_MASK(1)
@@ -834,6 +835,9 @@ static const struct regulator_desc axp717_regulators[] = {
 	AXP_DESC(AXP717, CPUSLDO, "cpusldo", "vin1", 500, 1400, 50,
 		 AXP717_CPUSLDO_CONTROL, AXP717_LDO_V_OUT_MASK,
 		 AXP717_LDO1_OUTPUT_CONTROL, BIT(4)),
+	AXP_DESC(AXP717, BOOST, "boost", "vin1", 4550, 5510, 64,
+		 AXP717_BOOST_CONTROL, AXP717_BOOST_V_OUT_MASK,
+		 AXP717_MODULE_EN_CONTROL_2, BIT(4)),
 };
 
 /* DCDC ranges shared with AXP813 */
@@ -1337,6 +1341,7 @@ static int axp20x_set_dcdc_freq(struct platform_device *pdev, u32 dcdcfreq)
 		step = 150;
 		break;
 	case AXP313A_ID:
+	case AXP323_ID:
 	case AXP717_ID:
 	case AXP15060_ID:
 		/* The DCDC PWM frequency seems to be fixed to 3 MHz. */
@@ -1523,6 +1528,15 @@ static bool axp20x_is_polyphase_slave(struct axp20x_dev *axp20x, int id)
 		}
 		break;
 
+	case AXP323_ID:
+		regmap_read(axp20x->regmap, AXP323_DCDC_MODE_CTRL2, &reg);
+
+		switch (id) {
+		case AXP313A_DCDC2:
+			return !!(reg & BIT(1));
+		}
+		break;
+
 	default:
 		return false;
 	}
@@ -1561,6 +1575,7 @@ static int axp20x_regulator_probe(struct platform_device *pdev)
 						  "x-powers,drive-vbus-en");
 		break;
 	case AXP313A_ID:
+	case AXP323_ID:
 		regulators = axp313a_regulators;
 		nregulators = AXP313A_REG_ID_MAX;
 		break;
@@ -1593,7 +1608,7 @@ static int axp20x_regulator_probe(struct platform_device *pdev)
 		nregulators = AXP15060_REG_ID_MAX;
 		break;
 	default:
-		dev_err(&pdev->dev, "Unsupported AXP variant: %ld\n",
+		dev_err(&pdev->dev, "Unsupported AXP variant: %d\n",
 			axp20x->variant);
 		return -EINVAL;
 	}

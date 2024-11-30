@@ -1946,8 +1946,7 @@ static void team_netpoll_cleanup(struct net_device *dev)
 	mutex_unlock(&team->lock);
 }
 
-static int team_netpoll_setup(struct net_device *dev,
-			      struct netpoll_info *npifo)
+static int team_netpoll_setup(struct net_device *dev)
 {
 	struct team *team = netdev_priv(dev);
 	struct team_port *port;
@@ -2189,12 +2188,12 @@ static void team_setup(struct net_device *dev)
 	 * Let this up to underlay drivers.
 	 */
 	dev->priv_flags |= IFF_UNICAST_FLT | IFF_LIVE_ADDR_CHANGE;
-
-	dev->features |= NETIF_F_LLTX;
-	dev->features |= NETIF_F_GRO;
+	dev->lltx = true;
 
 	/* Don't allow team devices to change network namespaces. */
-	dev->features |= NETIF_F_NETNS_LOCAL;
+	dev->netns_local = true;
+
+	dev->features |= NETIF_F_GRO;
 
 	dev->hw_features = TEAM_VLAN_FEATURES |
 			   NETIF_F_HW_VLAN_CTAG_RX |

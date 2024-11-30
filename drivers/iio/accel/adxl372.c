@@ -940,7 +940,7 @@ static int adxl372_read_event_config(struct iio_dev *indio_dev, const struct iio
 
 static int adxl372_write_event_config(struct iio_dev *indio_dev, const struct iio_chan_spec *chan,
 				      enum iio_event_type type, enum iio_event_direction dir,
-				      int state)
+				      bool state)
 {
 	struct adxl372_state *st = iio_priv(indio_dev);
 
@@ -1050,7 +1050,7 @@ static int adxl372_buffer_postenable(struct iio_dev *indio_dev)
 	st->fifo_format = adxl372_axis_lookup_table[i].fifo_format;
 	st->fifo_axis_mask = adxl372_axis_lookup_table[i].bits;
 	st->fifo_set_size = bitmap_weight(indio_dev->active_scan_mask,
-					  indio_dev->masklength);
+					  iio_get_masklength(indio_dev));
 
 	/* Configure the FIFO to store sets of impact event peak. */
 	if (st->peak_fifo_mode_en) {

@@ -435,8 +435,7 @@ static irqreturn_t bmi160_trigger_handler(int irq, void *p)
 	int i, ret, j = 0, base = BMI160_REG_DATA_MAGN_XOUT_L;
 	__le16 sample;
 
-	for_each_set_bit(i, indio_dev->active_scan_mask,
-			 indio_dev->masklength) {
+	iio_for_each_active_channel(indio_dev, i) {
 		ret = regmap_bulk_read(data->regmap, base + i * sizeof(sample),
 				       &sample, sizeof(sample));
 		if (ret)
@@ -691,17 +690,8 @@ static int bmi160_config_device_irq(struct iio_dev *indio_dev, int irq_type,
 static int bmi160_setup_irq(struct iio_dev *indio_dev, int irq,
 			    enum bmi160_int_pin pin)
 {
-	struct irq_data *desc;
-	u32 irq_type;
+	u32 irq_type = irq_get_trigger_type(irq);
 	int ret;
-
-	desc = irq_get_irq_data(irq);
-	if (!desc) {
-		dev_err(&indio_dev->dev, "Could not find IRQ %d\n", irq);
-		return -EINVAL;
-	}
-
-	irq_type = irqd_get_trigger_type(desc);
 
 	ret = bmi160_config_device_irq(indio_dev, irq_type, pin);
 	if (ret)

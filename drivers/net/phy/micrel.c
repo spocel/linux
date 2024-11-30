@@ -1389,6 +1389,8 @@ static int ksz9131_config_init(struct phy_device *phydev)
 	const struct device *dev_walker;
 	int ret;
 
+	phydev->mdix_ctrl = ETH_TP_MDI_AUTO;
+
 	dev_walker = &phydev->mdio.dev;
 	do {
 		of_node = dev_walker->of_node;
@@ -1438,28 +1440,30 @@ static int ksz9131_config_init(struct phy_device *phydev)
 #define MII_KSZ9131_AUTO_MDIX		0x1C
 #define MII_KSZ9131_AUTO_MDI_SET	BIT(7)
 #define MII_KSZ9131_AUTO_MDIX_SWAP_OFF	BIT(6)
+#define MII_KSZ9131_DIG_AXAN_STS	0x14
+#define MII_KSZ9131_DIG_AXAN_STS_LINK_DET	BIT(14)
+#define MII_KSZ9131_DIG_AXAN_STS_A_SELECT	BIT(12)
 
 static int ksz9131_mdix_update(struct phy_device *phydev)
 {
 	int ret;
 
-	ret = phy_read(phydev, MII_KSZ9131_AUTO_MDIX);
-	if (ret < 0)
-		return ret;
-
-	if (ret & MII_KSZ9131_AUTO_MDIX_SWAP_OFF) {
-		if (ret & MII_KSZ9131_AUTO_MDI_SET)
-			phydev->mdix_ctrl = ETH_TP_MDI;
-		else
-			phydev->mdix_ctrl = ETH_TP_MDI_X;
+	if (phydev->mdix_ctrl != ETH_TP_MDI_AUTO) {
+		phydev->mdix = phydev->mdix_ctrl;
 	} else {
-		phydev->mdix_ctrl = ETH_TP_MDI_AUTO;
-	}
+		ret = phy_read(phydev, MII_KSZ9131_DIG_AXAN_STS);
+		if (ret < 0)
+			return ret;
 
-	if (ret & MII_KSZ9131_AUTO_MDI_SET)
-		phydev->mdix = ETH_TP_MDI;
-	else
-		phydev->mdix = ETH_TP_MDI_X;
+		if (ret & MII_KSZ9131_DIG_AXAN_STS_LINK_DET) {
+			if (ret & MII_KSZ9131_DIG_AXAN_STS_A_SELECT)
+				phydev->mdix = ETH_TP_MDI;
+			else
+				phydev->mdix = ETH_TP_MDI_X;
+		} else {
+			phydev->mdix = ETH_TP_MDI_INVALID;
+		}
+	}
 
 	return 0;
 }
@@ -2000,7 +2004,7 @@ static int ksz9477_config_init(struct phy_device *phydev)
 	 * in this switch shall be regarded as broken.
 	 */
 	if (phydev->dev_flags & MICREL_NO_EEE)
-		phydev->eee_broken_modes = -1;
+		linkmode_fill(phydev->eee_broken_modes);
 
 	return kszphy_config_init(phydev);
 }
@@ -2014,10 +2018,8 @@ static void kszphy_get_strings(struct phy_device *phydev, u8 *data)
 {
 	int i;
 
-	for (i = 0; i < ARRAY_SIZE(kszphy_hw_stats); i++) {
-		strscpy(data + i * ETH_GSTRING_LEN,
-			kszphy_hw_stats[i].string, ETH_GSTRING_LEN);
-	}
+	for (i = 0; i < ARRAY_SIZE(kszphy_hw_stats); i++)
+		ethtool_puts(&data, kszphy_hw_stats[i].string);
 }
 
 static u64 kszphy_get_stat(struct phy_device *phydev, int i)

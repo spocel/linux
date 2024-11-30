@@ -188,6 +188,10 @@ struct net {
 #if IS_ENABLED(CONFIG_SMC)
 	struct netns_smc	smc;
 #endif
+#ifdef CONFIG_DEBUG_NET_SMALL_RTNL
+	/* Move to a better place when the config guard is removed. */
+	struct mutex		rtnl_mutex;
+#endif
 } __randomize_layout;
 
 #include <linux/seq_file_net.h>
@@ -451,8 +455,8 @@ struct pernet_operations {
 	/* Following method is called with RTNL held. */
 	void (*exit_batch_rtnl)(struct list_head *net_exit_list,
 				struct list_head *dev_kill_list);
-	unsigned int *id;
-	size_t size;
+	unsigned int * const id;
+	const size_t size;
 };
 
 /*

@@ -15,11 +15,11 @@
 #include <sound/ump_convert.h>
 
 #include <linux/usb/ch9.h>
+#include <linux/usb/func_utils.h>
 #include <linux/usb/gadget.h>
 #include <linux/usb/audio.h>
 #include <linux/usb/midi-v2.h>
 
-#include "u_f.h"
 #include "u_midi2.h"
 
 struct f_midi2;
@@ -642,12 +642,21 @@ static void process_ump_stream_msg(struct f_midi2_ep *ep, const u32 *data)
 		if (format)
 			return; // invalid
 		blk = (*data >> 8) & 0xff;
-		if (blk >= ep->num_blks)
-			return;
-		if (*data & UMP_STREAM_MSG_REQUEST_FB_INFO)
-			reply_ump_stream_fb_info(ep, blk);
-		if (*data & UMP_STREAM_MSG_REQUEST_FB_NAME)
-			reply_ump_stream_fb_name(ep, blk);
+		if (blk == 0xff) {
+			/* inquiry for all blocks */
+			for (blk = 0; blk < ep->num_blks; blk++) {
+				if (*data & UMP_STREAM_MSG_REQUEST_FB_INFO)
+					reply_ump_stream_fb_info(ep, blk);
+				if (*data & UMP_STREAM_MSG_REQUEST_FB_NAME)
+					reply_ump_stream_fb_name(ep, blk);
+			}
+		} else if (blk < ep->num_blks) {
+			/* only the specified block */
+			if (*data & UMP_STREAM_MSG_REQUEST_FB_INFO)
+				reply_ump_stream_fb_info(ep, blk);
+			if (*data & UMP_STREAM_MSG_REQUEST_FB_NAME)
+				reply_ump_stream_fb_name(ep, blk);
+		}
 		return;
 	}
 }
@@ -1276,10 +1285,8 @@ static int f_midi2_set_alt(struct usb_function *fn, unsigned int intf,
 
 	if (alt == 0)
 		op_mode = MIDI_OP_MODE_MIDI1;
-	else if (alt == 1)
-		op_mode = MIDI_OP_MODE_MIDI2;
 	else
-		op_mode = MIDI_OP_MODE_UNSET;
+		op_mode = MIDI_OP_MODE_MIDI2;
 
 	if (midi2->operation_mode == op_mode)
 		return 0;

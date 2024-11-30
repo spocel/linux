@@ -67,6 +67,12 @@ static const match_table_t cifs_secflavor_tokens = {
 	{ Opt_sec_err, NULL }
 };
 
+static const match_table_t cifs_upcall_target = {
+	{ Opt_upcall_target_mount, "mount" },
+	{ Opt_upcall_target_application, "app" },
+	{ Opt_upcall_target_err, NULL }
+};
+
 const struct fs_parameter_spec smb3_fs_parameters[] = {
 	/* Mount options that take no arguments */
 	fsparam_flag_no("user_xattr", Opt_user_xattr),
@@ -178,6 +184,7 @@ const struct fs_parameter_spec smb3_fs_parameters[] = {
 	fsparam_string("sec", Opt_sec),
 	fsparam_string("cache", Opt_cache),
 	fsparam_string("reparse", Opt_reparse),
+	fsparam_string("upcall_target", Opt_upcalltarget),
 
 	/* Arguments that should be ignored */
 	fsparam_flag("guest", Opt_ignore),
@@ -242,6 +249,29 @@ cifs_parse_security_flavors(struct fs_context *fc, char *value, struct smb3_fs_c
 		break;
 	default:
 		cifs_errorf(fc, "bad security option: %s\n", value);
+		return 1;
+	}
+
+	return 0;
+}
+
+static int
+cifs_parse_upcall_target(struct fs_context *fc, char *value, struct smb3_fs_context *ctx)
+{
+	substring_t args[MAX_OPT_ARGS];
+
+	ctx->upcall_target = UPTARGET_UNSPECIFIED;
+
+	switch (match_token(value, cifs_upcall_target, args)) {
+	case Opt_upcall_target_mount:
+		ctx->upcall_target = UPTARGET_MOUNT;
+		break;
+	case Opt_upcall_target_application:
+		ctx->upcall_target = UPTARGET_APP;
+		break;
+
+	default:
+		cifs_errorf(fc, "bad upcall target: %s\n", value);
 		return 1;
 	}
 
@@ -920,8 +950,15 @@ static int smb3_reconfigure(struct fs_context *fc)
 	else  {
 		kfree_sensitive(ses->password);
 		ses->password = kstrdup(ctx->password, GFP_KERNEL);
+		if (!ses->password)
+			return -ENOMEM;
 		kfree_sensitive(ses->password2);
 		ses->password2 = kstrdup(ctx->password2, GFP_KERNEL);
+		if (!ses->password2) {
+			kfree_sensitive(ses->password);
+			ses->password = NULL;
+			return -ENOMEM;
+		}
 	}
 	STEAL_STRING(cifs_sb, ctx, domainname);
 	STEAL_STRING(cifs_sb, ctx, nodename);
@@ -978,9 +1015,12 @@ static int smb3_fs_context_parse_param(struct fs_context *fc,
 
 	switch (opt) {
 	case Opt_compress:
+		if (!IS_ENABLED(CONFIG_CIFS_COMPRESSION)) {
+			cifs_errorf(fc, "CONFIG_CIFS_COMPRESSION kernel config option is unset\n");
+			goto cifs_parse_mount_err;
+		}
 		ctx->compress = true;
-		cifs_dbg(VFS,
-			"SMB3 compression support is experimental\n");
+		cifs_dbg(VFS, "SMB3 compression support is experimental\n");
 		break;
 	case Opt_nodfs:
 		ctx->nodfs = 1;
@@ -1440,6 +1480,10 @@ static int smb3_fs_context_parse_param(struct fs_context *fc,
 		if (cifs_parse_security_flavors(fc, param->string, ctx) != 0)
 			goto cifs_parse_mount_err;
 		break;
+	case Opt_upcalltarget:
+		if (cifs_parse_upcall_target(fc, param->string, ctx) != 0)
+			goto cifs_parse_mount_err;
+		break;
 	case Opt_cache:
 		if (cifs_parse_cache_flavor(fc, param->string, ctx) != 0)
 			goto cifs_parse_mount_err;
@@ -1616,6 +1660,11 @@ static int smb3_fs_context_parse_param(struct fs_context *fc,
 		break;
 	}
 	/* case Opt_ignore: - is ignored as expected ... */
+
+	if (ctx->multiuser && ctx->upcall_target == UPTARGET_MOUNT) {
+		cifs_errorf(fc, "multiuser mount option not supported with upcalltarget set as 'mount'\n");
+		goto cifs_parse_mount_err;
+	}
 
 	return 0;
 
@@ -1896,14 +1945,17 @@ void smb3_update_mnt_flags(struct cifs_sb_info *cifs_sb)
 	if (ctx->mfsymlinks) {
 		if (ctx->sfu_emul) {
 			/*
-			 * Our SFU ("Services for Unix" emulation does not allow
-			 * creating symlinks but does allow reading existing SFU
-			 * symlinks (it does allow both creating and reading SFU
-			 * style mknod and FIFOs though). When "mfsymlinks" and
+			 * Our SFU ("Services for Unix") emulation allows now
+			 * creating new and reading existing SFU symlinks.
+			 * Older Linux kernel versions were not able to neither
+			 * read existing nor create new SFU symlinks. But
+			 * creating and reading SFU style mknod and FIFOs was
+			 * supported for long time. When "mfsymlinks" and
 			 * "sfu" are both enabled at the same time, it allows
 			 * reading both types of symlinks, but will only create
 			 * them with mfsymlinks format. This allows better
-			 * Apple compatibility (probably better for Samba too)
+			 * Apple compatibility, compatibility with older Linux
+			 * kernel clients (probably better for Samba too)
 			 * while still recognizing old Windows style symlinks.
 			 */
 			cifs_dbg(VFS, "mount options mfsymlinks and sfu both enabled\n");

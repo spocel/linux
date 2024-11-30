@@ -13,25 +13,16 @@ tprogs-y += sockex1
 tprogs-y += sockex2
 tprogs-y += sockex3
 tprogs-y += tracex1
-tprogs-y += tracex2
 tprogs-y += tracex3
 tprogs-y += tracex4
 tprogs-y += tracex5
 tprogs-y += tracex6
-tprogs-y += tracex7
-tprogs-y += test_probe_write_user
 tprogs-y += trace_output
 tprogs-y += lathist
 tprogs-y += offwaketime
 tprogs-y += spintest
 tprogs-y += map_perf_test
-tprogs-y += test_overhead
-tprogs-y += test_cgrp2_array_pin
-tprogs-y += test_cgrp2_attach
-tprogs-y += test_cgrp2_sock
-tprogs-y += test_cgrp2_sock2
 tprogs-y += xdp_router_ipv4
-tprogs-y += test_current_task_under_cgroup
 tprogs-y += trace_event
 tprogs-y += sampleip
 tprogs-y += tc_l2_redirect
@@ -63,25 +54,16 @@ sockex1-objs := sockex1_user.o
 sockex2-objs := sockex2_user.o
 sockex3-objs := sockex3_user.o
 tracex1-objs := tracex1_user.o $(TRACE_HELPERS)
-tracex2-objs := tracex2_user.o
 tracex3-objs := tracex3_user.o
 tracex4-objs := tracex4_user.o
 tracex5-objs := tracex5_user.o $(TRACE_HELPERS)
 tracex6-objs := tracex6_user.o
-tracex7-objs := tracex7_user.o
-test_probe_write_user-objs := test_probe_write_user_user.o
 trace_output-objs := trace_output_user.o
 lathist-objs := lathist_user.o
 offwaketime-objs := offwaketime_user.o $(TRACE_HELPERS)
 spintest-objs := spintest_user.o $(TRACE_HELPERS)
 map_perf_test-objs := map_perf_test_user.o
 test_overhead-objs := test_overhead_user.o
-test_cgrp2_array_pin-objs := test_cgrp2_array_pin.o
-test_cgrp2_attach-objs := test_cgrp2_attach.o
-test_cgrp2_sock-objs := test_cgrp2_sock.o
-test_cgrp2_sock2-objs := test_cgrp2_sock2.o
-test_current_task_under_cgroup-objs := $(CGROUP_HELPERS) \
-				       test_current_task_under_cgroup_user.o
 trace_event-objs := trace_event_user.o $(TRACE_HELPERS)
 sampleip-objs := sampleip_user.o $(TRACE_HELPERS)
 tc_l2_redirect-objs := tc_l2_redirect_user.o
@@ -105,14 +87,10 @@ always-y += sockex1_kern.o
 always-y += sockex2_kern.o
 always-y += sockex3_kern.o
 always-y += tracex1.bpf.o
-always-y += tracex2.bpf.o
 always-y += tracex3.bpf.o
 always-y += tracex4.bpf.o
 always-y += tracex5.bpf.o
 always-y += tracex6.bpf.o
-always-y += tracex7.bpf.o
-always-y += sock_flags.bpf.o
-always-y += test_probe_write_user.bpf.o
 always-y += trace_output.bpf.o
 always-y += tcbpf1_kern.o
 always-y += tc_l2_redirect_kern.o
@@ -120,12 +98,7 @@ always-y += lathist_kern.o
 always-y += offwaketime.bpf.o
 always-y += spintest.bpf.o
 always-y += map_perf_test.bpf.o
-always-y += test_overhead_tp.bpf.o
-always-y += test_overhead_raw_tp.bpf.o
-always-y += test_overhead_kprobe.bpf.o
 always-y += parse_varlen.o parse_simple.o parse_ldabs.o
-always-y += test_cgrp2_tc.bpf.o
-always-y += test_current_task_under_cgroup.bpf.o
 always-y += trace_event_kern.o
 always-y += sampleip_kern.o
 always-y += lwt_len_hist.bpf.o
@@ -169,6 +142,10 @@ BPF_EXTRA_CFLAGS += -I$(srctree)/arch/mips/include/asm/mach-generic
 endif
 endif
 
+ifeq ($(ARCH), x86)
+BPF_EXTRA_CFLAGS += -fcf-protection
+endif
+
 TPROGS_CFLAGS += -Wall -O2
 TPROGS_CFLAGS += -Wmissing-prototypes
 TPROGS_CFLAGS += -Wstrict-prototypes
@@ -194,7 +171,6 @@ TPROGLDLIBS_xdp_router_ipv4	+= -lm -pthread
 TPROGLDLIBS_tracex4		+= -lrt
 TPROGLDLIBS_trace_output	+= -lrt
 TPROGLDLIBS_map_perf_test	+= -lrt
-TPROGLDLIBS_test_overhead	+= -lrt
 
 # Allows pointing LLC/CLANG to a LLVM backend with bpf support, redefine on cmdline:
 # make M=samples/bpf LLC=~/git/llvm-project/llvm/build/bin/llc CLANG=~/git/llvm-project/llvm/build/bin/clang
@@ -405,7 +381,7 @@ $(obj)/%.o: $(src)/%.c
 		-Wno-gnu-variable-sized-type-not-at-end \
 		-Wno-address-of-packed-member -Wno-tautological-compare \
 		-Wno-unknown-warning-option $(CLANG_ARCH_ARGS) \
-		-fno-asynchronous-unwind-tables -fcf-protection \
+		-fno-asynchronous-unwind-tables \
 		-I$(srctree)/samples/bpf/ -include asm_goto_workaround.h \
 		-O2 -emit-llvm -Xclang -disable-llvm-passes -c $< -o - | \
 		$(OPT) -O2 -mtriple=bpf-pc-linux | $(LLVM_DIS) | \

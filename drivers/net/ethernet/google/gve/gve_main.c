@@ -1566,7 +1566,7 @@ static int gve_set_xdp(struct gve_priv *priv, struct bpf_prog *prog,
 	u32 status;
 
 	old_prog = READ_ONCE(priv->xdp_prog);
-	if (!netif_carrier_ok(priv->dev)) {
+	if (!netif_running(priv->dev)) {
 		WRITE_ONCE(priv->xdp_prog, prog);
 		if (old_prog)
 			bpf_prog_put(old_prog);
@@ -1847,7 +1847,7 @@ int gve_adjust_queues(struct gve_priv *priv,
 	rx_alloc_cfg.qcfg = &new_rx_config;
 	tx_alloc_cfg.num_rings = new_tx_config.num_queues;
 
-	if (netif_carrier_ok(priv->dev)) {
+	if (netif_running(priv->dev)) {
 		err = gve_adjust_config(priv, &tx_alloc_cfg, &rx_alloc_cfg);
 		return err;
 	}
@@ -1875,6 +1875,11 @@ static void gve_turndown(struct gve_priv *priv)
 
 		if (!gve_tx_was_added_to_block(priv, idx))
 			continue;
+
+		if (idx < priv->tx_cfg.num_queues)
+			netif_queue_set_napi(priv->dev, idx,
+					     NETDEV_QUEUE_TYPE_TX, NULL);
+
 		napi_disable(&block->napi);
 	}
 	for (idx = 0; idx < priv->rx_cfg.num_queues; idx++) {
@@ -1883,6 +1888,9 @@ static void gve_turndown(struct gve_priv *priv)
 
 		if (!gve_rx_was_added_to_block(priv, idx))
 			continue;
+
+		netif_queue_set_napi(priv->dev, idx, NETDEV_QUEUE_TYPE_RX,
+				     NULL);
 		napi_disable(&block->napi);
 	}
 
@@ -1909,6 +1917,12 @@ static void gve_turnup(struct gve_priv *priv)
 			continue;
 
 		napi_enable(&block->napi);
+
+		if (idx < priv->tx_cfg.num_queues)
+			netif_queue_set_napi(priv->dev, idx,
+					     NETDEV_QUEUE_TYPE_TX,
+					     &block->napi);
+
 		if (gve_is_gqi(priv)) {
 			iowrite32be(0, gve_irq_doorbell(priv, block));
 		} else {
@@ -1931,6 +1945,9 @@ static void gve_turnup(struct gve_priv *priv)
 			continue;
 
 		napi_enable(&block->napi);
+		netif_queue_set_napi(priv->dev, idx, NETDEV_QUEUE_TYPE_RX,
+				     &block->napi);
+
 		if (gve_is_gqi(priv)) {
 			iowrite32be(0, gve_irq_doorbell(priv, block));
 		} else {
@@ -2064,7 +2081,7 @@ static int gve_set_features(struct net_device *netdev,
 
 	if ((netdev->features & NETIF_F_LRO) != (features & NETIF_F_LRO)) {
 		netdev->features ^= NETIF_F_LRO;
-		if (netif_carrier_ok(netdev)) {
+		if (netif_running(netdev)) {
 			err = gve_adjust_config(priv, &tx_alloc_cfg, &rx_alloc_cfg);
 			if (err)
 				goto revert_features;
@@ -2359,7 +2376,7 @@ err:
 
 int gve_reset(struct gve_priv *priv, bool attempt_teardown)
 {
-	bool was_up = netif_carrier_ok(priv->dev);
+	bool was_up = netif_running(priv->dev);
 	int err;
 
 	dev_info(&priv->pdev->dev, "Performing reset\n");
@@ -2544,6 +2561,54 @@ static const struct netdev_queue_mgmt_ops gve_queue_mgmt_ops = {
 	.ndo_queue_stop		=	gve_rx_queue_stop,
 };
 
+static void gve_get_rx_queue_stats(struct net_device *dev, int idx,
+				   struct netdev_queue_stats_rx *rx_stats)
+{
+	struct gve_priv *priv = netdev_priv(dev);
+	struct gve_rx_ring *rx = &priv->rx[idx];
+	unsigned int start;
+
+	do {
+		start = u64_stats_fetch_begin(&rx->statss);
+		rx_stats->packets = rx->rpackets;
+		rx_stats->bytes = rx->rbytes;
+		rx_stats->alloc_fail = rx->rx_skb_alloc_fail +
+				       rx->rx_buf_alloc_fail;
+	} while (u64_stats_fetch_retry(&rx->statss, start));
+}
+
+static void gve_get_tx_queue_stats(struct net_device *dev, int idx,
+				   struct netdev_queue_stats_tx *tx_stats)
+{
+	struct gve_priv *priv = netdev_priv(dev);
+	struct gve_tx_ring *tx = &priv->tx[idx];
+	unsigned int start;
+
+	do {
+		start = u64_stats_fetch_begin(&tx->statss);
+		tx_stats->packets = tx->pkt_done;
+		tx_stats->bytes = tx->bytes_done;
+	} while (u64_stats_fetch_retry(&tx->statss, start));
+}
+
+static void gve_get_base_stats(struct net_device *dev,
+			       struct netdev_queue_stats_rx *rx,
+			       struct netdev_queue_stats_tx *tx)
+{
+	rx->packets = 0;
+	rx->bytes = 0;
+	rx->alloc_fail = 0;
+
+	tx->packets = 0;
+	tx->bytes = 0;
+}
+
+static const struct netdev_stat_ops gve_stat_ops = {
+	.get_queue_stats_rx	= gve_get_rx_queue_stats,
+	.get_queue_stats_tx	= gve_get_tx_queue_stats,
+	.get_base_stats		= gve_get_base_stats,
+};
+
 static int gve_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 {
 	int max_tx_queues, max_rx_queues;
@@ -2599,6 +2664,7 @@ static int gve_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	dev->ethtool_ops = &gve_ethtool_ops;
 	dev->netdev_ops = &gve_netdev_ops;
 	dev->queue_mgmt_ops = &gve_queue_mgmt_ops;
+	dev->stat_ops = &gve_stat_ops;
 
 	/* Set default and supported features.
 	 *
@@ -2700,7 +2766,7 @@ static void gve_shutdown(struct pci_dev *pdev)
 {
 	struct net_device *netdev = pci_get_drvdata(pdev);
 	struct gve_priv *priv = netdev_priv(netdev);
-	bool was_up = netif_carrier_ok(priv->dev);
+	bool was_up = netif_running(priv->dev);
 
 	rtnl_lock();
 	if (was_up && gve_close(priv->dev)) {
@@ -2718,7 +2784,7 @@ static int gve_suspend(struct pci_dev *pdev, pm_message_t state)
 {
 	struct net_device *netdev = pci_get_drvdata(pdev);
 	struct gve_priv *priv = netdev_priv(netdev);
-	bool was_up = netif_carrier_ok(priv->dev);
+	bool was_up = netif_running(priv->dev);
 
 	priv->suspend_cnt++;
 	rtnl_lock();

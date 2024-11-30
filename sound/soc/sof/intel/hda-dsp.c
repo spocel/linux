@@ -69,6 +69,7 @@ static void hda_get_interfaces(struct snd_sof_dev *sdev, u32 *interface_mask)
 		interface_mask[SOF_DAI_HOST_ACCESS] = BIT(SOF_DAI_INTEL_HDA);
 		break;
 	case SOF_INTEL_ACE_2_0:
+	case SOF_INTEL_ACE_3_0:
 		interface_mask[SOF_DAI_DSP_ACCESS] =
 			BIT(SOF_DAI_INTEL_SSP) | BIT(SOF_DAI_INTEL_DMIC) |
 			BIT(SOF_DAI_INTEL_HDA) | BIT(SOF_DAI_INTEL_ALH);
@@ -857,7 +858,6 @@ skip_dsp:
 
 static int hda_resume(struct snd_sof_dev *sdev, bool runtime_resume)
 {
-	const struct sof_intel_dsp_desc *chip;
 	int ret;
 
 	/* display codec must be powered before link reset */
@@ -889,10 +889,6 @@ static int hda_resume(struct snd_sof_dev *sdev, bool runtime_resume)
 		hda_dsp_ctrl_ppcap_enable(sdev, true);
 		hda_dsp_ctrl_ppcap_int_enable(sdev, true);
 	}
-
-	chip = get_chip_info(sdev->pdata);
-	if (chip && chip->hw_ip_version >= SOF_INTEL_ACE_2_0)
-		hda_sdw_int_enable(sdev, true);
 
 cleanup:
 	/* display codec can powered off after controller init */

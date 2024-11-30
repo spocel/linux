@@ -1815,8 +1815,6 @@ static int rswitch_get_ts_info(struct net_device *ndev, struct kernel_ethtool_ts
 
 	info->phc_index = ptp_clock_index(rdev->priv->ptp_priv->clock);
 	info->so_timestamping = SOF_TIMESTAMPING_TX_SOFTWARE |
-				SOF_TIMESTAMPING_RX_SOFTWARE |
-				SOF_TIMESTAMPING_SOFTWARE |
 				SOF_TIMESTAMPING_TX_HARDWARE |
 				SOF_TIMESTAMPING_RX_HARDWARE |
 				SOF_TIMESTAMPING_RAW_HARDWARE;
@@ -2190,7 +2188,7 @@ static DEFINE_SIMPLE_DEV_PM_OPS(renesas_eth_sw_pm_ops, renesas_eth_sw_suspend,
 
 static struct platform_driver renesas_eth_sw_driver_platform = {
 	.probe = renesas_eth_sw_probe,
-	.remove_new = renesas_eth_sw_remove,
+	.remove = renesas_eth_sw_remove,
 	.driver = {
 		.name = "renesas_eth_sw",
 		.pm = pm_sleep_ptr(&renesas_eth_sw_pm_ops),

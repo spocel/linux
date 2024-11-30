@@ -88,7 +88,6 @@ static inline void * phys_to_virt(unsigned long address)
 
 #define virt_to_phys		virt_to_phys
 #define phys_to_virt		phys_to_virt
-#define page_to_phys(page)	page_to_pa(page)
 
 /* Maximum PIO space address supported?  */
 #define IO_SPACE_LIMIT 0xffff
@@ -534,8 +533,10 @@ extern inline void writeq(u64 b, volatile void __iomem *addr)
 
 #define ioread16be(p) swab16(ioread16(p))
 #define ioread32be(p) swab32(ioread32(p))
+#define ioread64be(p) swab64(ioread64(p))
 #define iowrite16be(v,p) iowrite16(swab16(v), (p))
 #define iowrite32be(v,p) iowrite32(swab32(v), (p))
+#define iowrite64be(v,p) iowrite64(swab64(v), (p))
 
 #define inb_p		inb
 #define inw_p		inw
@@ -634,8 +635,6 @@ extern void outsl (unsigned long port, const void *src, unsigned long count);
  */
 #define ioread64 ioread64
 #define iowrite64 iowrite64
-#define ioread64be ioread64be
-#define iowrite64be iowrite64be
 #define ioread8_rep ioread8_rep
 #define ioread16_rep ioread16_rep
 #define ioread32_rep ioread32_rep

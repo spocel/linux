@@ -24,7 +24,7 @@
 #include <net/mac80211.h>
 #include <net/codel.h>
 #include <net/codel_impl.h>
-#include <asm/unaligned.h>
+#include <linux/unaligned.h>
 #include <net/fq_impl.h>
 #include <net/gso.h>
 
@@ -699,7 +699,7 @@ ieee80211_tx_h_rate_ctrl(struct ieee80211_tx_data *tx)
 	txrc.skb = tx->skb;
 	txrc.reported_rate.idx = -1;
 
-	if (unlikely(info->control.flags & IEEE80211_TX_CTRL_SCAN_TX)) {
+	if (unlikely(info->control.flags & IEEE80211_TX_CTRL_DONT_USE_RATE_MASK)) {
 		txrc.rate_idx_mask = ~0;
 	} else {
 		txrc.rate_idx_mask = tx->sdata->rc_rateidx_mask[info->band];
@@ -1763,12 +1763,13 @@ static bool __ieee80211_tx(struct ieee80211_local *local,
 
 	switch (sdata->vif.type) {
 	case NL80211_IFTYPE_MONITOR:
-		if (sdata->u.mntr.flags & MONITOR_FLAG_ACTIVE) {
+		if ((sdata->u.mntr.flags & MONITOR_FLAG_ACTIVE) ||
+		    ieee80211_hw_check(&local->hw, NO_VIRTUAL_MONITOR)) {
 			vif = &sdata->vif;
 			break;
 		}
 		sdata = rcu_dereference(local->monitor_sdata);
-		if (sdata) {
+		if (sdata && ieee80211_hw_check(&local->hw, WANT_MONITOR_VIF)) {
 			vif = &sdata->vif;
 			info->hw_queue =
 				vif->hw_queue[skb_get_queue_mapping(skb)];
@@ -3952,12 +3953,14 @@ begin:
 
 	switch (tx.sdata->vif.type) {
 	case NL80211_IFTYPE_MONITOR:
-		if (tx.sdata->u.mntr.flags & MONITOR_FLAG_ACTIVE) {
+		if ((tx.sdata->u.mntr.flags & MONITOR_FLAG_ACTIVE) ||
+		    ieee80211_hw_check(&local->hw, NO_VIRTUAL_MONITOR)) {
 			vif = &tx.sdata->vif;
 			break;
 		}
 		tx.sdata = rcu_dereference(local->monitor_sdata);
-		if (tx.sdata) {
+		if (tx.sdata &&
+		    ieee80211_hw_check(&local->hw, WANT_MONITOR_VIF)) {
 			vif = &tx.sdata->vif;
 			info->hw_queue =
 				vif->hw_queue[skb_get_queue_mapping(skb)];
@@ -5347,8 +5350,10 @@ ieee80211_beacon_get_ap(struct ieee80211_hw *hw,
 	if (beacon->tail)
 		skb_put_data(skb, beacon->tail, beacon->tail_len);
 
-	if (ieee80211_beacon_protect(skb, local, sdata, link) < 0)
+	if (ieee80211_beacon_protect(skb, local, sdata, link) < 0) {
+		dev_kfree_skb(skb);
 		return NULL;
+	}
 
 	ieee80211_beacon_get_finish(hw, vif, link, offs, beacon, skb,
 				    chanctx_conf, csa_off_base);
@@ -6211,7 +6216,7 @@ int ieee80211_tx_control_port(struct wiphy *wiphy, struct net_device *dev,
 		goto start_xmit;
 
 	/* update QoS header to prioritize control port frames if possible,
-	 * priorization also happens for control port frames send over
+	 * prioritization also happens for control port frames send over
 	 * AF_PACKET
 	 */
 	rcu_read_lock();
