@@ -11,13 +11,14 @@
 #ifndef ASM_NL
 #define ASM_NL		 ;
 #endif
-
+// 定义：CPP_ASMLINKAGE 用于定义C++中C语言的链接方式 ，有这个修饰的在c++中使用C语言的链接方式
 #ifdef __cplusplus
 #define CPP_ASMLINKAGE extern "C"
 #else
 #define CPP_ASMLINKAGE
 #endif
 
+// 
 #ifndef asmlinkage
 #define asmlinkage CPP_ASMLINKAGE
 #endif
